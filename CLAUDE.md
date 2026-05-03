@@ -2,6 +2,8 @@
 
 Rust MCP server + CLI for AST-aware code intelligence. Tree-sitter outlines, symbol search, callers/callees, file-level deps analysis. Replaces grep/cat/find for AI agents with structured, token-efficient output.
 
+For a subsystem-level walkthrough (data flow, key types, extension points, open architectural threads), see [ARCHITECTURE.md](ARCHITECTURE.md). The skeleton below is the quick-orient version.
+
 ## Project structure
 
 ```
