@@ -11,7 +11,6 @@ use serde_json::Value;
 
 use crate::cache::OutlineCache;
 use crate::index::bloom::BloomFilterCache;
-use crate::index::SymbolIndex;
 use crate::session::Session;
 
 /// Tracks abandoned threads (timed out but still running). Warns on stderr
@@ -127,7 +126,6 @@ pub fn run(edit_mode: bool, scope: Option<&Path>) -> io::Result<()> {
 
     let cache = Arc::new(OutlineCache::new());
     let session = Arc::new(Session::new());
-    let symbol_index = Arc::new(SymbolIndex::new());
     let bloom_cache = Arc::new(BloomFilterCache::new());
     let stdin = io::stdin();
     let stdout = io::stdout();
@@ -187,14 +185,7 @@ pub fn run(edit_mode: bool, scope: Option<&Path>) -> io::Result<()> {
             params,
         };
 
-        let response = handle_request(
-            &req,
-            &cache,
-            &session,
-            &symbol_index,
-            &bloom_cache,
-            edit_mode,
-        );
+        let response = handle_request(&req, &cache, &session, &bloom_cache, edit_mode);
         serde_json::to_writer(&mut stdout, &response)?;
         stdout.write_all(b"\n")?;
         stdout.flush()?;
@@ -294,7 +285,6 @@ fn handle_request(
     req: &JsonRpcRequest,
     cache: &Arc<OutlineCache>,
     session: &Arc<Session>,
-    index: &Arc<SymbolIndex>,
     bloom: &Arc<BloomFilterCache>,
     edit_mode: bool,
 ) -> JsonRpcResponse {
@@ -344,7 +334,7 @@ fn handle_request(
             error: None,
         },
 
-        "tools/call" => handle_tool_call(req, cache, session, index, bloom, edit_mode),
+        "tools/call" => handle_tool_call(req, cache, session, bloom, edit_mode),
 
         "ping" => JsonRpcResponse {
             jsonrpc: "2.0",
@@ -376,13 +366,12 @@ pub(crate) fn dispatch_tool(
     args: &Value,
     cache: &OutlineCache,
     session: &Session,
-    index: &Arc<SymbolIndex>,
     bloom: &Arc<BloomFilterCache>,
     edit_mode: bool,
 ) -> Result<String, String> {
     match tool {
         "tilth_read" => tool_read(args, cache, session, edit_mode),
-        "tilth_search" => tool_search(args, cache, session, index, bloom),
+        "tilth_search" => tool_search(args, cache, session, bloom),
         "tilth_files" => tool_files(args, cache),
         "tilth_deps" => tool_deps(args, cache, bloom),
         "tilth_diff" => tool_diff(args),
@@ -481,7 +470,6 @@ fn tool_search(
     args: &Value,
     cache: &OutlineCache,
     session: &Session,
-    index: &Arc<SymbolIndex>,
     bloom: &Arc<BloomFilterCache>,
 ) -> Result<String, String> {
     let query = args
@@ -517,7 +505,7 @@ fn tool_search(
                 1 => {
                     session.record_search(queries[0]);
                     crate::search::search_symbol_expanded(
-                        queries[0], &scope, cache, session, index, bloom, expand, context, glob,
+                        queries[0], &scope, cache, session, bloom, expand, context, glob,
                     )
                 }
                 2..=5 => {
@@ -525,7 +513,7 @@ fn tool_search(
                         session.record_search(q);
                     }
                     crate::search::search_multi_symbol_expanded(
-                        &queries, &scope, cache, session, index, bloom, expand, context, glob,
+                        &queries, &scope, cache, session, bloom, expand, context, glob,
                     )
                 }
                 _ => {
@@ -761,7 +749,6 @@ fn handle_tool_call(
     req: &JsonRpcRequest,
     cache: &Arc<OutlineCache>,
     session: &Arc<Session>,
-    index: &Arc<SymbolIndex>,
     bloom: &Arc<BloomFilterCache>,
     edit_mode: bool,
 ) -> JsonRpcResponse {
@@ -774,7 +761,6 @@ fn handle_tool_call(
     let args_owned = args.clone();
     let cache_clone = Arc::clone(cache);
     let session_clone = Arc::clone(session);
-    let index_clone = Arc::clone(index);
     let bloom_clone = Arc::clone(bloom);
 
     let (tx, rx) = mpsc::channel();
@@ -786,7 +772,6 @@ fn handle_tool_call(
             &args_owned,
             &cache_clone,
             &session_clone,
-            &index_clone,
             &bloom_clone,
             edit_mode,
         );
