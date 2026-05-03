@@ -571,7 +571,30 @@ fn find_defs_markdown_buf(
     let mut defs = Vec::new();
     let lines: Vec<&str> = content.lines().collect();
 
+    // Precompute per-line fence state. A line is "in a code block" if it sits
+    // between a ```/~~~ opener and its closer (or the EOF, for an unclosed
+    // fence). Fence delimiter lines themselves are also flagged — they're
+    // not ATX headings either. Both the heading-detect loop and the
+    // section-end peek loop honor this so a `# foo` inside a fenced block
+    // neither becomes a definition nor truncates an enclosing section.
+    let mut in_fence = vec![false; lines.len()];
+    {
+        let mut active = false;
+        for (i, line) in lines.iter().enumerate() {
+            let trimmed = line.trim_start();
+            if trimmed.starts_with("```") || trimmed.starts_with("~~~") {
+                in_fence[i] = true;
+                active = !active;
+                continue;
+            }
+            in_fence[i] = active;
+        }
+    }
+
     for (i, line) in lines.iter().enumerate() {
+        if in_fence[i] {
+            continue;
+        }
         let Some((level, heading_text)) = parse_atx_heading(line) else {
             continue;
         };
@@ -586,6 +609,9 @@ fn find_defs_markdown_buf(
         let heading_line = (i + 1) as u32;
         let mut end = lines.len();
         for (j, peek) in lines.iter().enumerate().skip(i + 1) {
+            if in_fence[j] {
+                continue;
+            }
             if let Some((peek_level, _)) = parse_atx_heading(peek) {
                 if peek_level <= level {
                     end = j;
@@ -1033,6 +1059,50 @@ end
     fn markdown_hashes_without_space_are_not_headings() {
         // `##foo` (no space after `#`s) is not a heading.
         assert!(md_find("##parseCitations\n", "parseCitations").is_empty());
+    }
+
+    #[test]
+    fn markdown_heading_inside_python_fence_is_not_a_def() {
+        // A Python comment `# parseCitations` inside ```python fence is not
+        // a heading — pre-fix this got flagged as an H1 def.
+        let content =
+            "## Real heading\n\n```python\n# parseCitations\ndef parseCitations(): ...\n```\n";
+        let defs = md_find(content, "parseCitations");
+        assert!(
+            defs.is_empty(),
+            "fenced `#`-prefixed line is not a heading; got {defs:?}"
+        );
+    }
+
+    #[test]
+    fn markdown_heading_inside_tilde_fence_is_not_a_def() {
+        // CommonMark allows ~~~ as a fence delimiter equivalent to ```.
+        let content = "## Real heading\n\n~~~py\n# parseCitations\n~~~\n";
+        let defs = md_find(content, "parseCitations");
+        assert!(defs.is_empty(), "tilde-fenced `#` line is not a heading");
+    }
+
+    #[test]
+    fn markdown_heading_after_closing_fence_is_a_def() {
+        // After the fence closes, a real `# parseCitations` heading must
+        // still be detected.
+        let content =
+            "## Intro\n\n```python\n# inside fence\n```\n\n## parseCitations\n\nProse.\n";
+        let defs = md_find(content, "parseCitations");
+        assert_eq!(defs.len(), 1, "post-fence heading must be detected");
+        assert_eq!(defs[0].line, 7);
+    }
+
+    #[test]
+    fn unclosed_fence_suppresses_following_headings() {
+        // An opening fence with no close suppresses every later candidate
+        // heading — CommonMark behavior, matching src/read/outline/markdown.rs.
+        let content = "```\n# parseCitations\n## parseCitations\n";
+        let defs = md_find(content, "parseCitations");
+        assert!(
+            defs.is_empty(),
+            "unclosed fence should suppress later headings; got {defs:?}"
+        );
     }
 
     #[test]
