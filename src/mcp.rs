@@ -35,11 +35,21 @@ fn request_timeout() -> Duration {
 const SERVER_INSTRUCTIONS: &str = "\
 tilth — code intelligence MCP server. Replaces grep, cat, find, ls with AST-aware equivalents.\n\
 \n\
-To explore code, always search first. tilth_search finds definitions, usages, and file locations in one call.\n\
+Pre-flight gate: before issuing any Bash command whose first token is grep/rg/ls/find/cat/head/tail, or any Read/Grep/Glob call on a path inside the project, stop and rewrite as tilth_*. Common rewrites:\n\
+  ls <dir>/                  → tilth_files(pattern: \"<dir>/*\")\n\
+  grep -rn <term> <path>     → tilth_search(query: \"<term>\", glob: \"<path>/**\")\n\
+  grep -E '\"<key>' <file>   → tilth_search(query: \"<key>\", kind: \"content\", glob: \"<file>\")\n\
+  cat/head/tail <file>       → tilth_read(paths: [\"<file>\"])\n\
+  git diff / git log -p      → tilth_diff(...)\n\
+Bash/Read are acceptable only for paths outside the indexed tree: git history (git log -S, git show), /tmp scratch, files not yet on disk, or paths the workspace's .gitignore excludes and .tilthignore does not re-include.\n\
+\n\
+To explore code, search first. tilth_search finds definitions, usages, and file locations in one call.\n\
 Usage: tilth_search(query: \"handleRequest\").\n\
 tilth_files is ONLY for listing directory contents when you have no symbol or text to search for.\n\
-DO NOT use Read if content is already shown in expanded search results.\n\
-DO NOT use Grep, Read, or Glob. Always use the better tools tilth_search (grep), tilth_read (read), tilth_files (glob).\n\
+\n\
+No re-reads: after tilth_read <path>, or tilth_search ... expand:N that inlined <path>, do not call Read/tilth_read on <path> again in the same task — the content is already in context. If you need a different slice, pass section: to tilth_read.\n\
+\n\
+DO NOT use Grep, Read, or Glob on project paths. DO NOT use Bash(grep/rg/ls/find/cat/head/tail/git diff/git log -p) on indexed paths. Always use tilth_search (grep), tilth_read (read), tilth_files (glob), tilth_diff (git diff).\n\
 \n\
 tilth_search: Search code — finds definitions, usages, and text. Replaces grep/rg for all code search.\n\
   For multi-symbol lookup, separate each with a comma \"symbol1,symbol2\" (max 5).\n\
@@ -77,14 +87,7 @@ tilth_diff: Structural diff — shows what changed at function level. Replaces B
   Usage: tilth_diff(source: \"HEAD~1\") for last commit. No args = uncommitted changes.\n\
   scope: \"file.rs\" or \"file.rs:fn_name\". log: \"HEAD~5..HEAD\" for per-commit summaries.\n\
   search: filter to lines matching a term. blast: true to show callers of changed signatures.\n\
-  Output: [+] added, [-] deleted, [~] body changed, [~:sig] signature changed.\n\
-  DO NOT use Bash(git diff) or Bash(git log --patch). Use tilth_diff instead.\n\
-\n\
-To search code, use tilth_search instead of Grep or Bash(grep/rg).\n\
-To read files, use tilth_read instead of Read or Bash(cat).\n\
-To find files, use tilth_files instead of Glob or Bash(find/ls).\n\
-To check what changed, use tilth_diff instead of Bash(git diff/git log).\n\
-DO NOT re-read files already shown in expanded search results.";
+  Output: [+] added, [-] deleted, [~] body changed, [~:sig] signature changed.";
 
 const EDIT_MODE_EXTRA: &str = "\n\
 \n\
