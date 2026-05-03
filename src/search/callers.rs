@@ -16,7 +16,6 @@ use crate::cache::OutlineCache;
 use crate::error::TilthError;
 use crate::lang::detect_file_type;
 use crate::lang::outline::outline_language;
-use crate::session::Session;
 use crate::types::FileType;
 
 const MAX_MATCHES: usize = 10;
@@ -456,8 +455,6 @@ fn elixir_kind_label(node: tree_sitter::Node, lines: &[&str]) -> &'static str {
 pub fn search_callers_expanded(
     target: &str,
     scope: &Path,
-    _cache: &OutlineCache,
-    _session: &Session,
     bloom: &crate::index::bloom::BloomFilterCache,
     expand: usize,
     context: Option<&Path>,

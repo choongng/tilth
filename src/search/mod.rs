@@ -334,11 +334,7 @@ pub fn format_raw_result(
     format_search_result(result, cache, None, &bloom, 0)
 }
 
-pub fn search_glob(
-    pattern: &str,
-    scope: &Path,
-    _cache: &OutlineCache,
-) -> Result<String, TilthError> {
+pub fn search_glob(pattern: &str, scope: &Path) -> Result<String, TilthError> {
     let result = glob::search(pattern, scope)?;
     format_glob_result(&result, scope)
 }
@@ -688,7 +684,6 @@ fn format_single_match(
                                     &callee_names,
                                     &m.path,
                                     &content,
-                                    cache,
                                     bloom,
                                     2,
                                     15,
