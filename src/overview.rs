@@ -8,11 +8,12 @@ use std::path::Path;
 use std::process::Command;
 use std::time::{Duration, Instant};
 
+use ignore::WalkBuilder;
 use serde::Deserialize;
 
 use crate::lang::detect_file_type;
 use crate::read::imports::is_import_line;
-use crate::search::SKIP_DIRS;
+use crate::search::{apply_ignore_settings, SKIP_DIRS};
 use crate::types::{FileType, Lang};
 
 /// Compute a project fingerprint for MCP initialization.
@@ -276,144 +277,89 @@ struct WalkResult {
 }
 
 fn walk_files(root: &Path) -> WalkResult {
-    let mut lang_counts: HashMap<Lang, usize> = HashMap::new();
-    let mut module_lang_counts: HashMap<String, HashMap<Lang, usize>> = HashMap::new();
-    let mut code_files: Vec<(String, u64)> = Vec::new();
-    let mut has_tests_dir = false;
-    let mut has_test_dir = false;
-    let mut has_dunder_tests = false;
-    let mut has_spec_dir = false;
-
-    // Walk depth 0 (root itself)
-    walk_dir(
-        root,
-        root,
-        0,
-        2,
-        &mut lang_counts,
-        &mut module_lang_counts,
-        &mut code_files,
-        &mut has_tests_dir,
-        &mut has_test_dir,
-        &mut has_dunder_tests,
-        &mut has_spec_dir,
-    );
-
-    WalkResult {
-        lang_counts,
-        module_lang_counts,
-        code_files,
-        has_tests_dir,
-        has_test_dir,
-        has_dunder_tests,
-        has_spec_dir,
-    }
-}
-
-#[allow(clippy::too_many_arguments)]
-fn walk_dir(
-    dir: &Path,
-    root: &Path,
-    depth: usize,
-    max_depth: usize,
-    lang_counts: &mut HashMap<Lang, usize>,
-    module_lang_counts: &mut HashMap<String, HashMap<Lang, usize>>,
-    code_files: &mut Vec<(String, u64)>,
-    has_tests_dir: &mut bool,
-    has_test_dir: &mut bool,
-    has_dunder_tests: &mut bool,
-    has_spec_dir: &mut bool,
-) {
-    let Ok(entries) = fs::read_dir(dir) else {
-        return;
+    let mut result = WalkResult {
+        lang_counts: HashMap::new(),
+        module_lang_counts: HashMap::new(),
+        code_files: Vec::new(),
+        has_tests_dir: false,
+        has_test_dir: false,
+        has_dunder_tests: false,
+        has_spec_dir: false,
     };
 
-    for entry in entries.flatten() {
+    // Original walker captured files at path-depths 1..=3 (depth=0 was the
+    // root, max_depth=2 gated recursion two levels in). max_depth(Some(3))
+    // is the WalkBuilder equivalent.
+    let mut builder = WalkBuilder::new(root);
+    apply_ignore_settings(&mut builder)
+        .max_depth(Some(3))
+        .filter_entry(|entry| {
+            if entry.file_type().is_some_and(|ft| ft.is_dir()) {
+                if let Some(name) = entry.file_name().to_str() {
+                    return !SKIP_DIRS.contains(&name);
+                }
+            }
+            true
+        });
+
+    for entry in builder.build().flatten() {
+        if entry.depth() == 0 {
+            continue;
+        }
         let path = entry.path();
         let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
             continue;
         };
-
-        let Ok(ft) = entry.file_type() else {
-            continue;
-        };
+        let Some(ft) = entry.file_type() else { continue };
 
         if ft.is_dir() {
-            if SKIP_DIRS.contains(&name) {
-                continue;
-            }
-
-            // Track test directories at any depth
             match name {
-                "tests" => *has_tests_dir = true,
-                "test" => *has_test_dir = true,
-                "__tests__" => *has_dunder_tests = true,
-                "spec" => *has_spec_dir = true,
+                "tests" => result.has_tests_dir = true,
+                "test" => result.has_test_dir = true,
+                "__tests__" => result.has_dunder_tests = true,
+                "spec" => result.has_spec_dir = true,
                 _ => {}
             }
+            continue;
+        }
 
-            if depth < max_depth {
-                walk_dir(
-                    &path,
-                    root,
-                    depth + 1,
-                    max_depth,
-                    lang_counts,
-                    module_lang_counts,
-                    code_files,
-                    has_tests_dir,
-                    has_test_dir,
-                    has_dunder_tests,
-                    has_spec_dir,
-                );
-            }
-        } else if ft.is_file() {
-            if let FileType::Code(lang) = detect_file_type(&path) {
-                *lang_counts.entry(lang).or_insert(0) += 1;
+        let FileType::Code(lang) = detect_file_type(path) else {
+            continue;
+        };
+        *result.lang_counts.entry(lang).or_insert(0) += 1;
 
-                // Track size for hot files
-                let size = entry.metadata().map_or(0, |m| m.len());
-                if let Ok(rel) = path.strip_prefix(root) {
-                    let rel_str = rel.to_string_lossy().to_string();
+        let size = entry.metadata().map_or(0, |m| m.len());
+        let Ok(rel) = path.strip_prefix(root) else {
+            continue;
+        };
+        result.code_files.push((rel.to_string_lossy().to_string(), size));
 
-                    code_files.push((rel_str, size));
-
-                    // Track module — use up to 2 path components as the key,
-                    // but only for files nested at least one level deep.
-                    // e.g. src/diff/mod.rs → key "src/diff", lib.rs → skipped
-                    {
-                        let mut comps = rel.components();
-                        if let Some(c1) = comps.next() {
-                            let remaining: Vec<_> = comps.collect();
-                            if !remaining.is_empty() {
-                                let key = if remaining.len() >= 2 {
-                                    // File is at depth 3+: use first two components
-                                    format!(
-                                        "{}/{}",
-                                        c1.as_os_str().to_string_lossy(),
-                                        remaining[0].as_os_str().to_string_lossy()
-                                    )
-                                } else {
-                                    // File is at depth 2: use first component only
-                                    c1.as_os_str().to_string_lossy().to_string()
-                                };
-                                *module_lang_counts
-                                    .entry(key)
-                                    .or_default()
-                                    .entry(lang)
-                                    .or_insert(0) += 1;
-                            }
-                        }
-                    }
-                }
-            }
-
-            // Check test file patterns
-            if name.contains(".test.") || name.contains(".spec.") {
-                // These contribute to test style but we detect in test_style()
+        // Module key: up to 2 leading path components, skipping files at root.
+        // src/diff/mod.rs → "src/diff", src/lib.rs → "src", lib.rs → skipped.
+        let mut comps = rel.components();
+        if let Some(c1) = comps.next() {
+            let remaining: Vec<_> = comps.collect();
+            if !remaining.is_empty() {
+                let key = if remaining.len() >= 2 {
+                    format!(
+                        "{}/{}",
+                        c1.as_os_str().to_string_lossy(),
+                        remaining[0].as_os_str().to_string_lossy()
+                    )
+                } else {
+                    c1.as_os_str().to_string_lossy().to_string()
+                };
+                *result
+                    .module_lang_counts
+                    .entry(key)
+                    .or_default()
+                    .entry(lang)
+                    .or_insert(0) += 1;
             }
         }
     }
+
+    result
 }
 
 // ---------------------------------------------------------------------------
