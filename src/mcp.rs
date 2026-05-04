@@ -42,6 +42,11 @@ Pre-flight gate: before issuing any Bash command whose first token is grep/rg/ls
   git diff / git log -p      → tilth_diff(...)\n\
 Bash/Read are acceptable only for paths outside the indexed tree: git history (git log -S, git show), /tmp scratch, files not yet on disk, or paths the workspace's .gitignore excludes and .tilthignore does not re-include.\n\
 \n\
+Capabilities beyond standard-tool replacements — reach for these when the question doesn't map to grep/cat/diff:\n\
+  Before changing an exported symbol's signature  → tilth_deps(path: \"<file>\")        — what imports it, what would break.\n\
+  After changing a function signature             → tilth_diff(blast: true)             — callers of changed signatures to update.\n\
+  Per-commit structural summary across a range    → tilth_diff(log: \"HEAD~5..HEAD\")     — what each commit changed at function level.\n\
+\n\
 To explore code, search first. tilth_search finds definitions, usages, and file locations in one call.\n\
 Usage: tilth_search(query: \"handleRequest\").\n\
 tilth_files is ONLY for listing directory contents when you have no symbol or text to search for.\n\
@@ -79,13 +84,14 @@ tilth_files: Find files by glob pattern. Replaces find, ls, pwd, and the host Gl
   Output: <path>  (~<token_count> tokens). Respects .gitignore (use `.tilthignore` with `!path` to re-include).\n\
 \n\
 tilth_deps: Blast-radius check — what imports this file and what it imports.\n\
-  Use ONLY before renaming, removing, or changing an export's signature.\n\
+  Reach for it BEFORE renaming, removing, or changing an exported symbol's signature.\n\
   Respects per-repo .gitignore (same overrides as tilth_search / tilth_files: `.tilthignore` / `TILTH_NO_IGNORE`).\n\
 \n\
 tilth_diff: Structural diff — shows what changed at function level. Replaces Bash(git diff).\n\
   Usage: tilth_diff(source: \"HEAD~1\") for last commit. No args = uncommitted changes.\n\
   scope: \"file.rs\" or \"file.rs:fn_name\". log: \"HEAD~5..HEAD\" for per-commit summaries.\n\
-  search: filter to lines matching a term. blast: true to show callers of changed signatures.\n\
+  search: filter to lines matching a term.\n\
+  blast: true — AFTER editing a function signature, run with blast: true to list callers needing updates.\n\
   Output: [+] added, [-] deleted, [~] body changed, [~:sig] signature changed.";
 
 const EDIT_MODE_EXTRA: &str = "\n\
