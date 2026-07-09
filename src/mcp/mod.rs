@@ -501,13 +501,14 @@ mod tests {
     fn server_instructions_byte_lock() {
         assert_eq!(
             SERVER_INSTRUCTIONS.len(),
-            1298,
+            2468,
             "SERVER_INSTRUCTIONS byte count drifted from baseline"
         );
         assert!(SERVER_INSTRUCTIONS
             .starts_with("tilth — code intelligence MCP server. Replaces grep, cat, find, ls"));
-        assert!(SERVER_INSTRUCTIONS
-            .ends_with("DO NOT re-read files already shown in expanded search results."));
+        assert!(SERVER_INSTRUCTIONS.ends_with(
+            "Always use tilth_search (grep), tilth_read (read), tilth_files (glob), tilth_diff (git diff)."
+        ));
         assert!(
             !SERVER_INSTRUCTIONS.contains("\n\n\n"),
             "SERVER_INSTRUCTIONS must not introduce triple newlines (likely a trailing-newline drift in prompts/mcp-base.md)"
@@ -518,13 +519,16 @@ mod tests {
             ),
             "require-root path discipline must lead the file-I/O guidance"
         );
-        // De-dup (R1) moved per-tool usage into the schemas. Lock that the
-        // native-vs-tilth steering for weaker models stays verbatim, and that the
-        // per-tool parameter manuals are gone from the always-on instructions field.
-        assert!(SERVER_INSTRUCTIONS.contains("DO NOT use Grep, Read, or Glob."));
-        assert!(SERVER_INSTRUCTIONS
-            .contains("To check what changed, use tilth_diff instead of Bash(git diff/git log)."));
-        assert!(SERVER_INSTRUCTIONS.contains("DO NOT use Bash(git diff) or Bash(git log --patch)."));
+        // The pre-flight gate leads the steering: rewrite native grep/cat/find/ls
+        // and git into tilth_* before falling back to Bash/Read.
+        assert!(
+            SERVER_INSTRUCTIONS.contains("Pre-flight gate:"),
+            "the pre-flight gate framing must lead the tool steering"
+        );
+        assert!(SERVER_INSTRUCTIONS.contains("DO NOT use Grep, Read, or Glob on project paths."));
+        assert!(SERVER_INSTRUCTIONS.contains("git diff / git log -p      → tilth_diff"));
+        // Per-tool parameter manuals stay in the tool schemas, not the always-on
+        // instructions field.
         assert!(
             !SERVER_INSTRUCTIONS.contains("expand (default 2)"),
             "per-tool parameter manuals belong in the tool schemas, not the instructions field"
@@ -556,8 +560,8 @@ mod tests {
         // "\n\n" to produce one blank line between the base and edit sections.
         // This asserts the composition still has that shape.
         let combined = format!("{SERVER_INSTRUCTIONS}{EDIT_MODE_EXTRA}");
-        assert!(combined.contains(
-            "DO NOT re-read files already shown in expanded search results.\n\ntilth_write replaces"
-        ));
+        assert!(
+            combined.contains("tilth_files (glob), tilth_diff (git diff).\n\ntilth_write replaces")
+        );
     }
 }

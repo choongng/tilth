@@ -21,7 +21,7 @@ pub(in crate::mcp) fn tool_definitions(edit_mode: bool) -> Vec<Value> {
         serde_json::json!({
             "name": "tilth_search",
             "annotations": { "readOnlyHint": true },
-            "description": "Search for symbols, text, or regex patterns in code. Replaces grep/rg and the host Grep tool — use this for all code search. Symbol search returns definitions first (via tree-sitter AST), then usages, with full source code inlined for top matches. Content search finds literal text. Regex search supports full regex patterns. For cross-file tracing, pass comma-separated symbol names (max 5).",
+            "description": "Search for symbols, text, or regex patterns in code. Replaces grep/rg and the host Grep tool — use this for all code search. Symbol search returns definitions first (via tree-sitter AST), then usages, with full source code inlined for top matches. Content search finds literal text. Regex search supports full regex patterns. For cross-file tracing, pass comma-separated symbol names (max 5). Respects per-repo .gitignore by default; use a `.tilthignore` file (gitignore syntax with `!path` to re-include) or `TILTH_NO_IGNORE=1` to override.",
             "inputSchema": {
                 "type": "object",
                 "required": ["query"],
@@ -43,7 +43,7 @@ pub(in crate::mcp) fn tool_definitions(edit_mode: bool) -> Vec<Value> {
                     "expand": {
                         "type": "number",
                         "default": 2,
-                        "description": "Number of top matches to expand with full source code. Definitions show the full function/class body. Usages show ±10 context lines."
+                        "description": "Number of top matches to expand with full source code. Definitions show the full function/class body. Usages show ±10 context lines. Default 2; pass a large value (e.g. 999) to inline every match — output stays bounded by `budget`."
                     },
                     "context": {
                         "type": "string",
@@ -114,7 +114,7 @@ pub(in crate::mcp) fn tool_definitions(edit_mode: bool) -> Vec<Value> {
         serde_json::json!({
             "name": "tilth_files",
             "annotations": { "readOnlyHint": true },
-            "description": "Find files matching a glob pattern. Replaces find/ls/pwd and the host Glob tool — use this for all file discovery. Returns matched file paths sorted by relevance with token size estimates. Use `patterns` to run several globs in one call.",
+            "description": "Find files matching a glob pattern. Replaces find/ls/pwd and the host Glob tool — use this for all file discovery. Returns matched file paths sorted by relevance with token size estimates. Use `patterns` to run several globs in one call. Respects per-repo .gitignore by default; use a `.tilthignore` file (gitignore syntax with `!path` to re-include) or `TILTH_NO_IGNORE=1` to override.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -145,7 +145,7 @@ pub(in crate::mcp) fn tool_definitions(edit_mode: bool) -> Vec<Value> {
         serde_json::json!({
             "name": "tilth_deps",
             "annotations": { "readOnlyHint": true },
-            "description": "Blast-radius check before breaking changes. Shows what a file imports (local + external) and what other files call its exports, with symbol-level detail. Use ONLY when your planned edit changes a function signature, removes/renames an export, or modifies behavior that callers rely on. Do NOT use for reading files, adding new code, or internal-only changes — use tilth_read instead.",
+            "description": "Blast-radius check before breaking changes. Shows what a file imports (local + external) and what other files call its exports, with symbol-level detail. Use ONLY when your planned edit changes a function signature, removes/renames an export, or modifies behavior that callers rely on. Do NOT use for reading files, adding new code, or internal-only changes — use tilth_read instead. Respects per-repo .gitignore (override via `.tilthignore` or `TILTH_NO_IGNORE=1`).",
             "inputSchema": {
                 "type": "object",
                 "required": ["path"],
