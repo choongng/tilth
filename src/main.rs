@@ -56,6 +56,12 @@ struct Cli {
     #[arg(long)]
     no_overview: bool,
 
+    /// Walk gitignored files too. By default tilth honors per-repo `.gitignore`
+    /// and `.tilthignore` overrides (gitignore syntax — use `!path` to
+    /// re-include). Equivalent to `TILTH_NO_IGNORE=1`.
+    #[arg(long)]
+    no_ignore: bool,
+
     /// Inline source for top N search matches (default 2 when flag bare).
     ///
     /// Applies to symbol / text / regex queries. Without the flag the
@@ -163,6 +169,13 @@ enum Command {
 fn main() {
     configure_thread_pools();
     let cli = Cli::parse();
+
+    // Propagate --no-ignore via env so it reaches every WalkBuilder site
+    // (CLI runners, MCP server, indexer, map). Set unconditionally so
+    // subprocess inheritance works the same way for `tilth --mcp`.
+    if cli.no_ignore {
+        std::env::set_var("TILTH_NO_IGNORE", "1");
+    }
 
     // Shell completions
     if let Some(shell) = cli.completions {

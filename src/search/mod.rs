@@ -35,8 +35,8 @@ use crate::types::{estimate_tokens, FileType, Match, SearchResult};
 use crate::format::rel;
 
 // Directories that are always skipped — build artifacts, dependencies, VCS internals.
-// We skip these explicitly instead of relying on .gitignore so that locally-relevant
-// gitignored files (docs/, configs, generated code) are still searchable.
+// Enforced regardless of `.gitignore` so a `TILTH_NO_IGNORE=1` walk still skips
+// universally-noisy dirs.
 pub(crate) const SKIP_DIRS: &[&str] = &[
     ".git",
     ".jj",
@@ -80,18 +80,28 @@ const EXPAND_FULL_FILE_THRESHOLD: u64 = 800;
 /// section)" so the user knows to expand for the rest.
 const MARKDOWN_PREVIEW_MAX_LINES: usize = 40;
 
-/// Shared walker policy: searches ALL files except known junk directories.
-/// Does NOT respect .gitignore — ensures gitignored but locally-relevant files
-/// are found. Used by both the parallel search walker (`walker()`) and the
-/// sequential map walker (`crate::map::generate`), which each apply their own
-/// final `.max_depth()`/`.threads()` and `.build()`/`.build_parallel()`.
+/// Shared walker policy honoring tilth's ignore rules.
+///
+/// Default: honor per-repo `.gitignore` plus `.tilthignore` files
+/// (gitignore syntax — write `!path` lines to force-include paths the
+/// repo `.gitignore` would have excluded). Global gitignore and
+/// `.git/info/exclude` are never consulted — those tend to list
+/// per-engineer files (agent state, editor scratch) that we still want
+/// to grep. `SKIP_DIRS` is always enforced.
+///
+/// Set `TILTH_NO_IGNORE=1` to walk every file (the pre-0.7 behavior),
+/// still respecting `SKIP_DIRS`. Used by both the parallel search walker
+/// (`walker()`) and the sequential map walker (`crate::map::generate`),
+/// which each apply their own final `.max_depth()`/`.threads()` and
+/// `.build()`/`.build_parallel()`.
 pub(crate) fn base_walk_builder(scope: &Path) -> WalkBuilder {
+    let no_ignore = std::env::var("TILTH_NO_IGNORE").is_ok_and(|v| !v.is_empty() && v != "0");
     let mut builder = WalkBuilder::new(scope);
     builder
         .follow_links(true)
         .same_file_system(true) // Stop at mount boundaries (NFS, external volumes).
         .hidden(false)
-        .git_ignore(false)
+        .git_ignore(!no_ignore)
         .git_global(false)
         .git_exclude(false)
         .ignore(false)
@@ -104,12 +114,17 @@ pub(crate) fn base_walk_builder(scope: &Path) -> WalkBuilder {
             }
             true
         });
+    if !no_ignore {
+        builder.add_custom_ignore_filename(".tilthignore");
+    }
     builder
 }
 
-/// Build a parallel directory walker that searches ALL files except known junk directories.
-/// Does NOT respect .gitignore — ensures gitignored but locally-relevant files are found.
-/// When `glob` is Some, applies a file-pattern override (whitelist or negation).
+/// Build a parallel directory walker.
+///
+/// Honors `.gitignore` + `.tilthignore` by default (see `base_walk_builder`).
+/// `SKIP_DIRS` is always enforced. When `glob` is Some, applies a file-pattern
+/// override (whitelist or negation).
 pub(crate) fn walker(scope: &Path, glob: Option<&str>) -> Result<ignore::WalkParallel, TilthError> {
     let threads = std::env::var("TILTH_THREADS")
         .ok()
@@ -1537,7 +1552,30 @@ fn format_glob_result(result: &glob::GlobResult, scope: &Path) -> Result<String,
 mod tests {
     use super::*;
     use std::collections::HashSet;
-    use std::sync::Mutex;
+    use std::sync::{Mutex, MutexGuard};
+
+    // Serializes tests that read/write the process-global TILTH_NO_IGNORE env
+    // var so a concurrent walker test never sees a half-set value.
+    static ENV_LOCK: Mutex<()> = Mutex::new(());
+
+    /// RAII guard: sets `TILTH_NO_IGNORE=1` while held, restores on drop, and
+    /// keeps `ENV_LOCK` for the guard's lifetime so no other ignore-sensitive
+    /// test runs concurrently.
+    struct NoIgnoreGuard(#[allow(dead_code)] MutexGuard<'static, ()>);
+    impl NoIgnoreGuard {
+        fn set() -> Self {
+            let lock = ENV_LOCK
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            std::env::set_var("TILTH_NO_IGNORE", "1");
+            NoIgnoreGuard(lock)
+        }
+    }
+    impl Drop for NoIgnoreGuard {
+        fn drop(&mut self) {
+            std::env::remove_var("TILTH_NO_IGNORE");
+        }
+    }
 
     /// Collect all file paths from a walker into a sorted Vec.
     fn walk_paths(scope: &Path, glob: Option<&str>) -> Vec<PathBuf> {
@@ -1600,6 +1638,63 @@ mod tests {
         assert!(
             !names.contains(&"store.rs".to_string()),
             "VCS-internal file leaked through the walker: {names:?}"
+        );
+    }
+
+    #[test]
+    fn walker_honors_gitignore_and_tilthignore_by_default() {
+        let tmp = tempfile::tempdir().unwrap();
+        // `.gitignore` is only consulted inside a git repo; an empty `.git`
+        // dir is enough to make the `ignore` crate treat this as one.
+        std::fs::create_dir(tmp.path().join(".git")).unwrap();
+        std::fs::write(tmp.path().join("keep.rs"), "fn keep() {}").unwrap();
+        std::fs::write(tmp.path().join("secret.rs"), "fn secret() {}").unwrap();
+        std::fs::write(tmp.path().join("reinc.rs"), "fn reinc() {}").unwrap();
+        std::fs::write(tmp.path().join(".gitignore"), "secret.rs\nreinc.rs\n").unwrap();
+        // `.tilthignore` negation re-includes a path `.gitignore` excluded.
+        std::fs::write(tmp.path().join(".tilthignore"), "!reinc.rs\n").unwrap();
+
+        // Serialize against the TILTH_NO_IGNORE test so its global env set
+        // can't leak in and make every file walkable mid-assertion.
+        let _lock = ENV_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        // Walk with no glob: a whitelist glob override (e.g. "*.rs") has higher
+        // precedence than .gitignore in the `ignore` crate and would re-include
+        // ignored files, so the honoring path is the None-glob walk.
+        let names: HashSet<String> = walk_paths(tmp.path(), None)
+            .iter()
+            .filter_map(|p| p.file_name()?.to_str().map(str::to_string))
+            .collect();
+        assert!(names.contains("keep.rs"), "got {names:?}");
+        assert!(
+            names.contains("reinc.rs"),
+            ".tilthignore !path should re-include, got {names:?}"
+        );
+        assert!(
+            !names.contains("secret.rs"),
+            ".gitignore should exclude secret.rs, got {names:?}"
+        );
+    }
+
+    #[test]
+    fn walker_no_ignore_env_walks_gitignored_files() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::create_dir(tmp.path().join(".git")).unwrap();
+        std::fs::write(tmp.path().join("keep.rs"), "fn keep() {}").unwrap();
+        std::fs::write(tmp.path().join("secret.rs"), "fn secret() {}").unwrap();
+        std::fs::write(tmp.path().join(".gitignore"), "secret.rs\n").unwrap();
+
+        // Scoped env guard: TILTH_NO_IGNORE is process-global, so serialize
+        // against other env-reading tests and always restore on drop.
+        let _guard = NoIgnoreGuard::set();
+        let names: HashSet<String> = walk_paths(tmp.path(), None)
+            .iter()
+            .filter_map(|p| p.file_name()?.to_str().map(str::to_string))
+            .collect();
+        assert!(
+            names.contains("secret.rs") && names.contains("keep.rs"),
+            "TILTH_NO_IGNORE=1 should walk gitignored files, got {names:?}"
         );
     }
 

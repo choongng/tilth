@@ -335,6 +335,8 @@ Search runs definitions and usages in parallel via `rayon::join`. Callee resolut
 
 The search output format is informed by wavelet multi-resolution (outline headers show line ranges for drill-down) and 1-hop callee expansion (expanded definitions resolve callees inline).
 
+For a subsystem-by-subsystem walkthrough — query pipeline, search/read engines, diff/edit, MCP server, caches, extension points — see [ARCHITECTURE.md](ARCHITECTURE.md).
+
 ## Name
 
 **tilth** — the state of soil that's been prepared for planting. Your codebase is the soil; tilth gives it structure so you can find where to dig.
